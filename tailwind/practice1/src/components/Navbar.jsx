@@ -47,16 +47,27 @@ const Navbar = () => {
             </button>
           </div>
         </div>
-        {/*If the Mobile drawer open is true then*/}
+        {/*If the Mobile drawer open is true*/}
         {mobileDrawerOpen && (
           <div className="flex flex-col justify-center items-center w-full right-0 fixed z-20 bg-neutral-900 p-12 lg:hidden">
             <ul>
               {navItems.map((item, index) => (
-                <li key={index}>
+                <li key={index} className="py-4">
                   <a href={item.href}>{item.label}</a>
                 </li>
               ))}
             </ul>
+            <div className="flex space-x-6">
+              <a href="#" className="py-2 px-3 border rounded-md">
+                Sign In
+              </a>
+              <a
+                href="#"
+                className="bg-gradient-to-r from-blue-500 to-blue-800 py-2 px-3 rounded-md"
+              >
+                Create an account
+              </a>
+            </div>
           </div>
         )}
       </div>
