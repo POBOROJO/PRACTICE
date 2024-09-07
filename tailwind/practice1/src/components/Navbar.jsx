@@ -1,4 +1,4 @@
-import { Menu, X } from "lucide-react";
+import { Divide, Menu, X } from "lucide-react";
 import { useState } from "react";
 import logo from "../assets/logo.png";
 import { navItems } from "../constants";
@@ -19,7 +19,7 @@ const Navbar = () => {
             <img className="h-10 w-10 mr-2" src={logo} alt="Logo" />
             <span className="text-xl tracking-tight">VirtualR</span>
           </div>
-          {/* list */}
+          {/* link */}
           <ul className="hidden lg:flex ml-14 space-x-12">
             {navItems.map((item, index) => (
               <li key={index}>
@@ -47,6 +47,18 @@ const Navbar = () => {
             </button>
           </div>
         </div>
+        {/*If the Mobile drawer open is true then*/}
+        {mobileDrawerOpen && (
+          <div className="flex flex-col justify-center items-center w-full right-0 fixed z-20 bg-neutral-900 p-12 lg:hidden">
+            <ul>
+              {navItems.map((item, index) => (
+                <li key={index}>
+                  <a href={item.href}>{item.label}</a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
     </nav>
   );
