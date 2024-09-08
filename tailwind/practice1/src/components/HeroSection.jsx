@@ -15,7 +15,7 @@ const HeroSection = () => {
         Empower your team with the best tools to build your next project and
         take it to the next level. Get started today!
       </p>
-      <div className="flex justify-center items-center my-10">
+      <div className="flex justify-center my-10">
         <button className="bg-gradient-to-r from-blue-500 to-blue-900 px-4 py-3 rounded-md">
           Get Started
         </button>
