@@ -1,3 +1,5 @@
 node_modules
 .env
 budget_speech.pdf
+code_context.txt
+code_context.sh

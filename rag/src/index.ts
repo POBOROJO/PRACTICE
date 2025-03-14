@@ -1,3 +1,4 @@
+// Import required dependencies
 import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf";
 import { RecursiveCharacterTextSplitter } from "langchain/text_splitter";
 import {
@@ -6,136 +7,160 @@ import {
 } from "@langchain/google-genai";
 import { TaskType } from "@google/generative-ai";
 import { FaissStore } from "@langchain/community/vectorstores/faiss";
-import { PromptTemplate } from "@langchain/core/prompts";
 import dotenv from "dotenv";
-import {
-  RunnableSequence,
-  RunnablePassthrough,
-} from "@langchain/core/runnables";
+import { RunnablePassthrough } from "@langchain/core/runnables";
 import { StringOutputParser } from "@langchain/core/output_parsers";
+import readline from "readline";
+// Import prompt templates from lib/template.ts
+import { QUERY_REFINEMENT_PROMPT, QA_PROMPT } from "./lib/template";
+import path from "path";
 
+// Configure environment variables
 dotenv.config();
 
-const budget_speech = "src/documents/budget_speech.pdf";
+// Initialize readline interface for command-line interaction
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
+});
+
+// Helper function to prompt user for input and return Promise
+const askQuestion = (query: string): Promise<string> => {
+  return new Promise((resolve) => {
+    rl.question(query, (answer) => {
+      resolve(answer);
+    });
+  });
+};
+
+// Define path to PDF document and initialize PDF loader
+const budget_speech = path.join(__dirname, "../documents/budget_speech.pdf");
 
 const loader = new PDFLoader(budget_speech);
 
-const Document = async () => {
+// Main function to setup the RAG (Retrieval Augmented Generation) system
+const setupRAG = async () => {
+  console.log("Loading document...");
+  // Load PDF document
   const docs = await loader.load();
 
-  // Split document into chunks
+  // Initialize text splitter with configuration for chunk size and overlap
   const splitter = new RecursiveCharacterTextSplitter({
-    chunkSize: 1000,
-    chunkOverlap: 200,
+    chunkSize: 1000, // Each chunk will be ~1000 characters
+    chunkOverlap: 200, // Overlap between chunks to maintain context
   });
 
+  // Split documents into smaller chunks for processing
+  console.log("Splitting document into chunks...");
   const splitDocs = await splitter.splitDocuments(docs);
 
-  // Create embeddings for document chunks
+  // Initialize embeddings model using Google's Generative AI
+  console.log("Creating embeddings...");
   const embeddings = new GoogleGenerativeAIEmbeddings({
     apiKey: process.env.GOOGLE_API_KEY,
-    model: "text-embedding-004",
+    model: "text-embedding-004", //768
     taskType: TaskType.RETRIEVAL_DOCUMENT,
   });
 
-  // Store embeddings in FAISS vector DB
-  const vectorStore = await FaissStore.fromDocuments(splitDocs, embeddings);
-  await vectorStore.save("./budget-vector-store");
-  console.log("Vector store created and saved");
+  // Initialize or load vector store for document chunks
+  let vectorStore;
+  try {
+    // Attempt to load existing vector store from disk
+    console.log("Trying to load existing vector store...");
+    vectorStore = await FaissStore.load("./budget-vector-store", embeddings);
+    console.log("Vector store loaded successfully");
+  } catch (error) {
+    // Create new vector store if none exists
+    console.log("Creating new vector store...");
+    vectorStore = await FaissStore.fromDocuments(splitDocs, embeddings);
+    await vectorStore.save("./budget-vector-store");
+    console.log("Vector store created and saved");
+  }
 
-  // Load saved vector store
-  const loadedVectorStore = await FaissStore.load(
-    "./budget-vector-store",
-    embeddings
-  );
-  const retriever = loadedVectorStore.asRetriever(100);
-
-  // Define the standalone question generation prompt
-  const standaloneQuestionTemplate = `Given a user query, generate a standalone question:
-  User Query: {prompt}
-  Standalone Question: `;
-
-  const standaloneQuestionPrompt = PromptTemplate.fromTemplate(
-    standaloneQuestionTemplate
-  );
-
-  // Define the context-aware response prompt
-  const promptWithContextTemplate = `
-  Answer the question by extracting relevant information from the CONTEXT below. Do not include the word "context" in your response. If the question is unrelated, respond with "Question is irrelevant."
-
-  CONTEXT: {context}
-  QUESTION: {prompt}
-  ANSWER: `;
-
-  const promptWithContextPrompt = PromptTemplate.fromTemplate(
-    promptWithContextTemplate
-  );
-
-  // Initialize the LLM
+  // Initialize Language Model for chat interactions
   const llm = new ChatGoogleGenerativeAI({
     apiKey: process.env.GOOGLE_API_KEY,
     model: "gemini-1.5-flash",
+    temperature: 0.7,
   });
 
-  // Define chains
-  const standaloneQuestionChain = RunnableSequence.from([
-    standaloneQuestionPrompt,
-    llm,
-    new StringOutputParser(),
-  ]);
+  // Create retriever from vector store for similarity search
+  const retriever = vectorStore.asRetriever(100);
 
-  interface PreviousResult {
-    standaloneQuestion: string;
-    originalInput: {
-      prompt: string;
-    };
-  }
+  // Main function to process user messages and generate responses
+  const processUserMessage = async (userPrompt: string) => {
+    try {
+      console.log("\nProcessing your question...");
 
-  interface RetrievedDoc {
-    pageContent: string;
-    metadata: Record<string, any>;
-  }
+      // Step 1: Refine the user's query for better retrieval
+      const searchQuery = await QUERY_REFINEMENT_PROMPT.pipe(llm)
+        .pipe(new StringOutputParser())
+        .invoke({
+          userPrompt,
+        });
 
-  const retrievalChain = RunnableSequence.from<PreviousResult, string>([
-    (prevResult: PreviousResult) => prevResult.standaloneQuestion,
-    retriever,
-    (docs: RetrievedDoc[]) => docs.map((doc) => doc.pageContent).join("\n\n"),
-  ]);
+      console.log(`Refined search query: ${searchQuery}`);
 
-  const answerChain = RunnableSequence.from([
-    promptWithContextPrompt,
-    llm,
-    new StringOutputParser(),
-  ]);
+      // Step 2: Retrieve relevant documents using refined query
+      const relevantDocs = await retriever.invoke(searchQuery);
+      const context = relevantDocs.map((doc) => doc.pageContent).join("\n\n");
 
-  // Main processing chain
-  const chain = RunnableSequence.from([
-    {
-      standaloneQuestion: standaloneQuestionChain,
-      originalInput: new RunnablePassthrough(),
-    },
-    (prevResult) => {
-      console.log("Standalone Question:", prevResult.standaloneQuestion);
-      return prevResult;
-    },
-    {
-      context: retrievalChain,
-      prompt: ({ originalInput }) => originalInput.prompt,
-    },
-    (prevResult) => {
-      console.log("Retrieved Context:", prevResult.context);
-      return prevResult;
-    },
-    answerChain,
-  ]);
+      console.log(`Retrieved ${relevantDocs.length} relevant document chunks`);
 
-  // Query the system
-  const query = "What are the main price increases in the budget?";
-  console.log(`Question: ${query}`);
+      // Step 3: Generate answer using retrieved context
+      const answer = await QA_PROMPT.pipe(llm)
+        .pipe(new StringOutputParser())
+        .invoke({
+          context,
+          question: userPrompt,
+        });
 
-  const response = await chain.invoke({ prompt: query });
+      return answer;
+    } catch (error) {
+      // Handle any errors during processing
+      console.error("Error processing message:", error);
+      return "Sorry, I encountered an error while processing your question.";
+    }
+  };
 
-  console.log("Response:", response);
+  return { processUserMessage };
 };
 
-Document();
+// Function to start interactive command-line session
+const startInteractiveSession = async () => {
+  // Initialize RAG system
+  console.log("Setting up the RAG system...");
+  const { processUserMessage } = await setupRAG();
+
+  // Start interactive loop
+  console.log("\n🤖 Budget Speech RAG System Ready!");
+  console.log(
+    "Ask questions about the budget speech, or type 'bye' to quit.\n"
+  );
+
+  // Continue processing questions until user exits
+  let continueSession = true;
+  while (continueSession) {
+    // Get user input
+    const userQuestion = await askQuestion("\nYour question: ");
+
+    // Check for exit command
+    if (userQuestion.toLowerCase() === "bye") {
+      continueSession = false;
+      console.log("Goodbye!");
+      rl.close();
+      continue;
+    }
+
+    // Process question and display answer
+    const answer = await processUserMessage(userQuestion);
+    console.log("\n🤖 Answer:");
+    console.log(answer);
+  }
+};
+
+// Start the application and handle any errors
+startInteractiveSession().catch((error) => {
+  console.error("An error occurred:", error);
+  rl.close();
+});
